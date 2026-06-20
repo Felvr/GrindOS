@@ -1,0 +1,170 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================
+   Palette as CSS variables ("r g b" channels). Swapping these
+   under html[data-theme] re-skins the whole app.
+   ============================================================ */
+:root {
+  color-scheme: dark;
+
+  /* HUD (default) — dark slate + cyan/gold/red */
+  --slate-50: 248 250 252;
+  --slate-100: 241 245 249;
+  --slate-200: 226 232 240;
+  --slate-300: 203 213 225;
+  --slate-400: 148 163 184;
+  --slate-500: 100 116 139;
+  --slate-600: 71 85 105;
+  --slate-700: 51 65 85;
+  --slate-800: 30 41 59;
+  --slate-900: 15 23 42;
+  --slate-950: 2 6 23;
+
+  --prog: 34 211 238;
+  --prog-dim: 14 116 144;
+  --loot: 245 197 66;
+  --loot-dim: 168 133 31;
+  --boss: 239 68 68;
+  --boss-dim: 153 27 27;
+
+  --rarity-junk: 100 116 139;
+  --rarity-uncommon: 74 222 128;
+  --rarity-rare: 56 189 248;
+  --rarity-epic: 192 132 252;
+  --rarity-legendary: 245 197 66;
+
+  --bg: 11 17 32;
+  --fg: 226 232 240;
+}
+
+/* Pip-Boy — green phosphor monochrome (Fallout-style CRT) */
+html[data-theme="pipboy"] {
+  --slate-50: 210 255 200;
+  --slate-100: 190 255 175;
+  --slate-200: 170 245 160;
+  --slate-300: 130 220 130;
+  --slate-400: 96 196 104;
+  --slate-500: 64 150 74;
+  --slate-600: 30 86 38;
+  --slate-700: 18 54 24;
+  --slate-800: 9 33 14;
+  --slate-900: 4 20 8;
+  --slate-950: 1 10 3;
+
+  --prog: 70 230 90;
+  --prog-dim: 20 110 40;
+  --loot: 150 255 120;
+  --loot-dim: 96 150 50;
+  --boss: 210 255 130;
+  --boss-dim: 120 160 60;
+
+  --rarity-junk: 60 110 60;
+  --rarity-uncommon: 96 184 92;
+  --rarity-rare: 124 220 112;
+  --rarity-epic: 172 245 132;
+  --rarity-legendary: 210 255 150;
+
+  --bg: 1 9 3;
+  --fg: 150 245 130;
+}
+
+html,
+body {
+  background-color: rgb(var(--bg));
+  color: rgb(var(--fg));
+}
+
+/* visible focus ring everywhere */
+:focus-visible {
+  outline: 2px solid rgb(var(--prog));
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* thin scrollbars for the HUD feel */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(var(--slate-700)) transparent;
+}
+
+/* ============================================================
+   Pip-Boy CRT layer: scanlines, vignette, glow, flicker.
+   "Calm" mode softens it; reduced-motion kills the flicker.
+   ============================================================ */
+html[data-theme="pipboy"] body {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-shadow: 0 0 3px rgb(var(--prog) / 0.45);
+}
+
+html[data-theme="pipboy"] body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+  background:
+    repeating-linear-gradient(
+      to bottom,
+      rgba(0, 0, 0, 0) 0px,
+      rgba(0, 0, 0, 0) 2px,
+      rgba(0, 0, 0, 0.28) 3px,
+      rgba(0, 0, 0, 0.28) 4px
+    ),
+    radial-gradient(
+      ellipse at center,
+      rgba(0, 0, 0, 0) 55%,
+      rgba(0, 0, 0, 0.55) 100%
+    );
+  animation: crt-flicker 3.2s steps(60) infinite;
+}
+
+@keyframes crt-flicker {
+  0%,
+  96%,
+  100% {
+    opacity: 1;
+  }
+  97% {
+    opacity: 0.82;
+  }
+  98% {
+    opacity: 1;
+  }
+  99% {
+    opacity: 0.9;
+  }
+}
+
+/* calm mode: lighter scanlines, no flicker, softer glow */
+html[data-theme="pipboy"][data-crt-calm="true"] body {
+  text-shadow: 0 0 2px rgb(var(--prog) / 0.25);
+}
+html[data-theme="pipboy"][data-crt-calm="true"] body::after {
+  animation: none;
+  background:
+    repeating-linear-gradient(
+      to bottom,
+      rgba(0, 0, 0, 0) 0px,
+      rgba(0, 0, 0, 0) 3px,
+      rgba(0, 0, 0, 0.12) 4px,
+      rgba(0, 0, 0, 0.12) 5px
+    ),
+    radial-gradient(
+      ellipse at center,
+      rgba(0, 0, 0, 0) 65%,
+      rgba(0, 0, 0, 0.35) 100%
+    );
+}
+
+/* respect reduced motion (also kills CRT flicker) */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
