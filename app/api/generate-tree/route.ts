@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 import { callLLM } from "@/lib/llm";
+import { anonId, estimateCostUsd, log } from "@/lib/logger";
 import { extractJson, normalizeTree } from "@/lib/normalize";
 import { offlineFromPlan, offlineTree } from "@/lib/offline";
+import { clientIp, rateLimit, reserveLlmCall } from "@/lib/ratelimit";
 import type { DifficultyRequest, GeneratedTree } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -39,8 +41,9 @@ export async function POST(req: Request) {
   let difficulty: DifficultyRequest = "auto";
   try {
     const body = await req.json();
-    topic = typeof body?.topic === "string" ? body.topic.trim() : "";
-    plan = typeof body?.plan === "string" ? body.plan.trim() : "";
+    // cap input sizes — prevents token/cost blowups and abuse
+    topic = typeof body?.topic === "string" ? body.topic.trim().slice(0, 200) : "";
+    plan = typeof body?.plan === "string" ? body.plan.trim().slice(0, 4000) : "";
     if (["auto", "easy", "medium", "hard"].includes(body?.difficulty)) {
       difficulty = body.difficulty;
     }
@@ -54,38 +57,52 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "topic or plan required" }, { status: 400 });
   }
 
+  const gid = anonId(req);
+  const offline = () =>
+    plan ? offlineFromPlan(topic, plan, difficulty) : offlineTree(subject, difficulty);
+
+  // rate limit + global budget — on excess, serve the FREE offline draft (no API cost)
+  const rl = rateLimit(`tree:${clientIp(req)}`, 10, 5 * 60_000);
+  if (!rl.ok || !reserveLlmCall()) {
+    log({ kind: "llm", route: "tree", gid, blocked: rl.ok ? "budget" : "ratelimit" });
+    return NextResponse.json(offline());
+  }
+
   const planDirective = plan
     ? `\n\nДан ГОТОВЫЙ ПЛАН пользователя. Структурируй ИМЕННО эти шаги: сохрани их порядок и смысл, разнеси по узлам/тирам, не выдумывай новых шагов и не выбрасывай существующие. type скорее всего "project", финал — босс. Каждый пункт плана ≈ один узел.\n\nПЛАН:\n${plan}`
     : "";
 
+  const t0 = Date.now();
   try {
-    const text = await callLLM(
+    const r = await callLLM(
       buildSystem(difficulty) + planDirective,
       plan
         ? `Заголовок: ${topic || "(придумай короткий по плану)"}\nСтруктурируй план в JSON по схеме.`
         : `Тема/дело: ${topic}\nВерни минифицированный JSON по схеме.`,
       2000
     );
-    if (text === null) {
-      // no provider key → graceful offline draft
-      return NextResponse.json(
-        plan ? offlineFromPlan(topic, plan, difficulty) : offlineTree(topic, difficulty)
-      );
+    if (r === null) {
+      return NextResponse.json(offline()); // no provider key → graceful draft
     }
 
-    const parsed = JSON.parse(extractJson(text));
+    log({
+      kind: "llm",
+      route: "tree",
+      gid,
+      model: r.model,
+      promptTokens: r.promptTokens,
+      completionTokens: r.completionTokens,
+      costUsd: estimateCostUsd(r.model, r.promptTokens, r.completionTokens),
+      ms: Date.now() - t0,
+      ok: true,
+    });
+
+    const parsed = JSON.parse(extractJson(r.text));
     const tree: GeneratedTree = normalizeTree(parsed, subject, difficulty);
-
-    if (!tree.nodes.length) {
-      return NextResponse.json(
-        plan ? offlineFromPlan(topic, plan, difficulty) : offlineTree(subject, difficulty)
-      );
-    }
+    if (!tree.nodes.length) return NextResponse.json(offline());
     return NextResponse.json(tree);
   } catch (err) {
-    console.error("generate-tree failed:", err);
-    return NextResponse.json(
-      plan ? offlineFromPlan(topic, plan, difficulty) : offlineTree(subject, difficulty)
-    );
+    log({ kind: "llm", route: "tree", gid, ok: false, error: String(err).slice(0, 200) });
+    return NextResponse.json(offline());
   }
 }

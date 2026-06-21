@@ -83,3 +83,42 @@ OPENROUTER_API_KEY=sk-or-... npm run start:lan
 | `ANTHROPIC_API_KEY` | ключ Anthropic (если без OpenRouter) |
 | `OPENROUTER_MODEL` | модель OpenRouter (дефолт `google/gemini-flash-1.5`) |
 | `ANTHROPIC_MODEL` | модель Anthropic (дефолт `claude-haiku-4-5-20251001`) |
+| `LLM_DAILY_CAP` | макс. число ИИ-вызовов в сутки на инстанс (дефолт 3000) — жёсткий потолок бюджета |
+
+## Безопасность (для публичного запуска / рекламы)
+
+Единственная платная поверхность — ИИ-роуты (`/api/generate-tree`, `/api/generate-quiz`,
+`/api/explain-node`). Что уже включено:
+
+- **Rate limit по IP** (`lib/ratelimit.ts`): tree 10 / 5 мин, quiz 15 / 5 мин, explain 20 / 5 мин,
+  track 120 / мин. Превышение: tree → бесплатный офлайн-черновик; quiz/explain → 429.
+- **Глобальный дневной потолок** ИИ-вызовов `LLM_DAILY_CAP` (по умолчанию 3000): при достижении
+  tree → офлайн, quiz/explain → 503. Защита от распределённого флуда (много IP).
+- **Лимиты длины ввода**: topic ≤200, plan ≤4000, focus ≤2000 символов — против раздувания токенов.
+- **Ключи только на сервере** (`lib/llm.ts` + route handlers); в клиентский бандл не попадают.
+- **Заголовки безопасности** (`next.config.mjs`): nosniff, X-Frame-Options, Referrer-Policy,
+  Permissions-Policy; `poweredByHeader: false`.
+- **Анонимный cookie `gid`** (middleware) — без PII, только для атрибуции стоимости/событий.
+
+Рекомендации перед платным трафиком:
+1. **Сменить модель на дешёвую.** Сейчас `OPENROUTER_MODEL=anthropic/claude-sonnet-4.6` —
+   дорого (~$0.0035 за «разбор», дерево ещё дороже). Для бесплатного продукта поставь
+   `google/gemini-flash-1.5` или `openai/gpt-4o-mini` — дешевле в десятки раз.
+2. Выставить лимит трат на стороне OpenRouter (Billing → limits), как страховку.
+3. Подобрать `LLM_DAILY_CAP` под свой бюджет: дневной максимум ≈ `LLM_DAILY_CAP × средняя_цена_вызова`.
+
+## Стоимость на пользователя (как считать)
+
+Каждый ИИ-вызов пишет в stdout строку JSON, напр.:
+`{"kind":"llm","route":"tree","gid":"<id>","model":"...","promptTokens":..,"completionTokens":..,"costUsd":0.01,"ms":..,"ok":true}`
+А события вовлечения: `{"kind":"event","event":"app_open","gid":"<id>"}`.
+
+В Railway → Logs (или `railway logs`) выгружаешь логи и считаешь:
+- **Суммарная стоимость** = сумма `costUsd` по строкам `kind:"llm"`.
+- **Активные пользователи** = число уникальных `gid` среди `event:"app_open"`.
+- **Средняя стоимость на пользователя** = суммарная стоимость / уникальные `gid`.
+- Воронка: `app_open` → `tree_generated` → `focus_complete`.
+
+Пример (jq):
+`railway logs | grep '"kind":"llm"' | jq -s 'map(.costUsd//0)|add'`  — общая трата;
+`railway logs | grep app_open | jq -r .gid | sort -u | wc -l`  — уникальные пользователи.

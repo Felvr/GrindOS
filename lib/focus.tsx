@@ -9,6 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { track } from "./analytics";
 import { commitRun, type CommitRunResult } from "./store";
 import type { Bet, Milestone, RunEntry } from "./types";
 
@@ -87,6 +88,7 @@ export function FocusProvider({ children }: { children: React.ReactNode }) {
     (s: FocusSession, minutes: number) => {
       if (finishedRef.current) return;
       finishedRef.current = true;
+      track("focus_complete");
       const res = commitRun(s.slug, s.nodeId, minutes, s.phoneFree);
       setSession(null);
       if (res) {

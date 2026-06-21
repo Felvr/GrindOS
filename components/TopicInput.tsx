@@ -2,6 +2,7 @@
 
 import { ArrowLeft, Loader2, Sparkles, WifiOff } from "lucide-react";
 import { useState } from "react";
+import { track } from "@/lib/analytics";
 import { offlineFromPlan, offlineTree } from "@/lib/offline";
 import type { DifficultyRequest, GeneratedTree } from "@/lib/types";
 import { ThemeMenu } from "./ThemeMenu";
@@ -50,6 +51,7 @@ export function TopicInput({
       });
       if (!res.ok) throw new Error(`status ${res.status}`);
       const gen: GeneratedTree = await res.json();
+      track("tree_generated");
       onTree(gen);
     } catch (e) {
       setError("Не удалось сгенерировать дерево.");

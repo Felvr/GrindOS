@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { callLLM } from "@/lib/llm";
+import { anonId, estimateCostUsd, log } from "@/lib/logger";
 import { extractJson } from "@/lib/normalize";
+import { clientIp, rateLimit, reserveLlmCall } from "@/lib/ratelimit";
 import type { Quiz, QuizQuestion } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -46,8 +48,8 @@ export async function POST(req: Request) {
   let count = 5;
   try {
     const b = await req.json();
-    topic = typeof b?.topic === "string" ? b.topic.trim() : "";
-    focus = typeof b?.focus === "string" ? b.focus.trim() : "";
+    topic = typeof b?.topic === "string" ? b.topic.trim().slice(0, 200) : "";
+    focus = typeof b?.focus === "string" ? b.focus.trim().slice(0, 2000) : "";
     if (Number.isFinite(Number(b?.count))) {
       count = Math.max(3, Math.min(12, Math.round(Number(b.count))));
     }
@@ -59,26 +61,50 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "topic required" }, { status: 400 });
   }
 
+  const gid = anonId(req);
+  const rl = rateLimit(`quiz:${clientIp(req)}`, 15, 5 * 60_000);
+  if (!rl.ok) {
+    log({ kind: "llm", route: "quiz", gid, blocked: "ratelimit" });
+    return NextResponse.json(
+      { error: "Слишком часто — попробуй чуть позже." },
+      { status: 429, headers: { "Retry-After": String(rl.retryAfter) } }
+    );
+  }
+  if (!reserveLlmCall()) {
+    log({ kind: "llm", route: "quiz", gid, blocked: "budget" });
+    return NextResponse.json({ error: "Сервис перегружен, попробуй позже." }, { status: 503 });
+  }
+
+  const t0 = Date.now();
   try {
-    const text = await callLLM(
+    const r = await callLLM(
       buildSystem(count),
       `Тема: ${topic}\nОсвоенные шаги: ${focus || "(основы темы)"}\nСоставь тест ровно из ${count} вопросов по этим знаниям.`,
       Math.max(1200, count * 260)
     );
-    if (text === null) {
-      return NextResponse.json(
-        { error: "no LLM key configured" },
-        { status: 503 }
-      );
+    if (r === null) {
+      return NextResponse.json({ error: "no LLM key configured" }, { status: 503 });
     }
 
-    const quiz = normalizeQuiz(JSON.parse(extractJson(text)), count);
+    log({
+      kind: "llm",
+      route: "quiz",
+      gid,
+      model: r.model,
+      promptTokens: r.promptTokens,
+      completionTokens: r.completionTokens,
+      costUsd: estimateCostUsd(r.model, r.promptTokens, r.completionTokens),
+      ms: Date.now() - t0,
+      ok: true,
+    });
+
+    const quiz = normalizeQuiz(JSON.parse(extractJson(r.text)), count);
     if (!quiz.questions.length) {
       return NextResponse.json({ error: "empty quiz" }, { status: 502 });
     }
     return NextResponse.json(quiz);
   } catch (err) {
-    console.error("generate-quiz failed:", err);
+    log({ kind: "llm", route: "quiz", gid, ok: false, error: String(err).slice(0, 200) });
     return NextResponse.json({ error: "generation failed" }, { status: 502 });
   }
 }
