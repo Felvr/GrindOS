@@ -133,10 +133,31 @@ export interface Milestone {
 }
 
 // Global, cross-grind account profile (lifetime XP feeds these milestones).
+export interface DailyTask {
+  id: string;
+  text: string;
+  done: boolean;
+  ref?: { slug: string; nodeId: string }; // linked project quest (auto-associated)
+}
+
+export interface DailyTasks {
+  date: string; // YYYY-MM-DD this list belongs to
+  tasks: DailyTask[];
+  claimed: boolean; // day-completion loot already taken
+}
+
+export interface XpLogEntry {
+  t: number;
+  amount: number;
+}
+
 export interface Profile {
   milestones: Milestone[];
   bets: Bet[]; // account-level wagers (stake drawn from the whole account)
-  xpAdjust: number; // signed account-balance adjustment from held/settled bets
+  xpAdjust: number; // signed account-balance adjustment (bets, daily tasks, day loot)
+  earnedAdjust: number; // monotonic non-grind XP (daily tasks/loot) — feeds milestones
+  daily: DailyTasks; // today's task list
+  xpLog: XpLogEntry[]; // timestamped non-grind XP (for period stats / future leagues)
 }
 
 // Difficulty request from the UI: "auto" lets the AI classify.

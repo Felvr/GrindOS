@@ -2,6 +2,7 @@
 
 import {
   ChevronDown,
+  ListChecks,
   Plus,
   RotateCcw,
   Sparkles,
@@ -10,6 +11,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { allCleared } from "@/lib/engine";
 import type { Grind, GrindIndexEntry } from "@/lib/types";
+import { openDaily } from "./DailyPanel";
 import { NavLinks } from "./NavLinks";
 import { ThemeMenu } from "./ThemeMenu";
 import { XpChip } from "./XpChip";
@@ -150,6 +152,14 @@ export function Header({
             className="rounded-lg border border-slate-700 p-2 text-slate-400 hover:border-slate-500 hover:text-slate-200"
           >
             <Plus size={16} />
+          </button>
+          <button
+            onClick={openDaily}
+            aria-label="Задачи на день"
+            data-tour="daily"
+            className="rounded-lg border border-slate-700 p-2 text-slate-400 hover:border-slate-500 hover:text-slate-200"
+          >
+            <ListChecks size={16} />
           </button>
           <ThemeMenu />
         </div>

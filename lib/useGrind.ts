@@ -109,6 +109,9 @@ export function useGrind(): UseGrind {
     milestones: [],
     bets: [],
     xpAdjust: 0,
+    earnedAdjust: 0,
+    daily: { date: "", tasks: [], claimed: false },
+    xpLog: [],
   });
   const [decayNotice, setDecayNotice] = useState<DecayNotice | null>(null);
   const [expiredBets, setExpiredBets] = useState<Bet[]>([]);
@@ -129,6 +132,16 @@ export function useGrind(): UseGrind {
     setProfile(loadProfile());
     setLifeXP(lifetimeXP());
     setReady(true);
+  }, []);
+
+  // account XP changed elsewhere (daily-tasks panel) → refresh chip/profile
+  useEffect(() => {
+    const onXp = () => {
+      setProfile(loadProfile());
+      setLifeXP(lifetimeXP());
+    };
+    window.addEventListener("grindos:xp", onXp);
+    return () => window.removeEventListener("grindos:xp", onXp);
   }, []);
 
   // persist + keep index fresh on every grind change

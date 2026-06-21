@@ -1,20 +1,33 @@
 import {
   applyRun,
   detectHitMilestones,
+  isAvailable,
   placeBet,
   resolveBets,
+  rollLoot,
   totalBalanceXP,
   totalEarnedXP,
+  type LootResult,
   type RunResult,
 } from "./engine";
 import type {
   Bet,
+  DailyTask,
   GeneratedTree,
   Grind,
   GrindIndexEntry,
   Milestone,
   Profile,
 } from "./types";
+
+// local YYYY-MM-DD for "today"
+function todayKey(d = new Date()): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+    d.getDate()
+  ).padStart(2, "0")}`;
+}
+
+export const DAILY_TASK_XP = 20;
 
 const INDEX_KEY = "grindos:index";
 const LAST_KEY = "grindos:last";
@@ -182,7 +195,7 @@ export function lifetimeXP(): number {
 
 // Monotonic total ever earned — used for milestone unlocks so decay can't undo them.
 export function lifetimeEarned(): number {
-  return totalEarnedXP(loadAllGrinds());
+  return totalEarnedXP(loadAllGrinds()) + (loadProfile().earnedAdjust ?? 0);
 }
 
 export interface CommitRunResult {
@@ -275,23 +288,193 @@ const SEED_MILESTONES: Profile["milestones"] = [
   { id: "m3", xpTarget: 5000, reward: "Купить что-то для хобби 🎁" },
 ];
 
+const emptyDaily = (): Profile["daily"] => ({
+  date: todayKey(),
+  tasks: [],
+  claimed: false,
+});
+
+function freshProfile(): Profile {
+  return {
+    milestones: SEED_MILESTONES,
+    bets: [],
+    xpAdjust: 0,
+    earnedAdjust: 0,
+    daily: emptyDaily(),
+    xpLog: [],
+  };
+}
+
 export function loadProfile(): Profile {
   const p = parse<Profile | null>(read(PROFILE_KEY), null);
   if (p && Array.isArray(p.milestones)) {
-    // backfill account-level bet fields for older saves
+    // backfill fields added in later versions
     return {
       ...p,
       bets: Array.isArray(p.bets) ? p.bets : [],
       xpAdjust: typeof p.xpAdjust === "number" ? p.xpAdjust : 0,
+      earnedAdjust: typeof p.earnedAdjust === "number" ? p.earnedAdjust : 0,
+      daily: p.daily && Array.isArray(p.daily.tasks) ? p.daily : emptyDaily(),
+      xpLog: Array.isArray(p.xpLog) ? p.xpLog : [],
     };
   }
-  const seeded: Profile = { milestones: SEED_MILESTONES, bets: [], xpAdjust: 0 };
+  const seeded = freshProfile();
   saveProfile(seeded);
   return seeded;
 }
 
 export function saveProfile(profile: Profile): void {
   write(PROFILE_KEY, JSON.stringify(profile));
+}
+
+// ---- daily tasks ----
+function addXpLog(profile: Profile, amount: number): Profile {
+  return {
+    ...profile,
+    xpLog: [...profile.xpLog, { t: Date.now(), amount }].slice(-200),
+  };
+}
+
+// Reset the daily list when the date rolls over, and auto-seed it with one
+// random project quest for the day. Runs once per day (the reset branch only
+// fires on the first call after midnight).
+export function loadDaily(): Profile {
+  const p = loadProfile();
+  if (p.daily.date !== todayKey()) {
+    const tasks: DailyTask[] = [];
+    const pool = availableQuests();
+    if (pool.length) {
+      const q = pool[Math.floor(Math.random() * pool.length)];
+      tasks.push({
+        id: `t${Date.now()}`,
+        text: q.name,
+        done: false,
+        ref: { slug: q.slug, nodeId: q.nodeId },
+      });
+    }
+    const next: Profile = {
+      ...p,
+      daily: { date: todayKey(), tasks, claimed: false },
+    };
+    saveProfile(next);
+    return next;
+  }
+  return p;
+}
+
+export function addDailyTask(
+  text: string,
+  ref?: { slug: string; nodeId: string }
+): Profile {
+  const p = loadDaily();
+  const t = text.trim();
+  if (!t) return p;
+  const next: Profile = {
+    ...p,
+    daily: {
+      ...p.daily,
+      tasks: [
+        ...p.daily.tasks,
+        { id: `t${Date.now()}`, text: t, done: false, ...(ref ? { ref } : {}) },
+      ],
+    },
+  };
+  saveProfile(next);
+  return next;
+}
+
+// Actionable quests across all non-archived projects (available, not cleared) —
+// for adding to the daily list (manually or at random).
+export interface QuestCandidate {
+  slug: string;
+  title: string; // project title
+  nodeId: string;
+  name: string; // quest name
+}
+
+export function availableQuests(): QuestCandidate[] {
+  const out: QuestCandidate[] = [];
+  for (const g of loadAllGrinds()) {
+    if (g.archived) continue;
+    for (const node of g.tree.nodes) {
+      if (isAvailable(g, node)) {
+        out.push({ slug: g.slug, title: g.title, nodeId: node.id, name: node.name });
+      }
+    }
+  }
+  return out;
+}
+
+// Add a random available quest to today's list (skips ones already added). Returns
+// the updated profile, or null if there are no candidates left.
+export function addRandomQuestToDaily(): Profile | null {
+  const p = loadDaily();
+  const linked = new Set(
+    p.daily.tasks.filter((t) => t.ref).map((t) => `${t.ref!.slug}:${t.ref!.nodeId}`)
+  );
+  const pool = availableQuests().filter(
+    (q) => !linked.has(`${q.slug}:${q.nodeId}`)
+  );
+  if (!pool.length) return null;
+  const q = pool[Math.floor(Math.random() * pool.length)];
+  return addDailyTask(q.name, { slug: q.slug, nodeId: q.nodeId });
+}
+
+export function removeDailyTask(id: string): Profile {
+  const p = loadDaily();
+  const next: Profile = {
+    ...p,
+    daily: { ...p.daily, tasks: p.daily.tasks.filter((x) => x.id !== id) },
+  };
+  saveProfile(next);
+  return next;
+}
+
+// Toggle a task; completing grants +DAILY_TASK_XP to the account (undo reverts it).
+export function toggleDailyTask(id: string): Profile {
+  const p = loadDaily();
+  const task = p.daily.tasks.find((x) => x.id === id);
+  if (!task) return p;
+  const nowDone = !task.done;
+  const delta = nowDone ? DAILY_TASK_XP : -DAILY_TASK_XP;
+  let next: Profile = {
+    ...p,
+    daily: {
+      ...p.daily,
+      tasks: p.daily.tasks.map((x) => (x.id === id ? { ...x, done: nowDone } : x)),
+    },
+    xpAdjust: (p.xpAdjust ?? 0) + delta,
+    earnedAdjust: (p.earnedAdjust ?? 0) + delta,
+  };
+  next = addXpLog(next, delta);
+  saveProfile(next);
+  return next;
+}
+
+export interface DayLootResult {
+  profile: Profile;
+  loot: LootResult;
+  bonus: number;
+}
+
+// Claim the day-completion reward: requires all tasks done and not yet claimed.
+export function claimDayLoot(): DayLootResult | null {
+  const p = loadDaily();
+  const all = p.daily.tasks;
+  if (p.daily.claimed || all.length === 0 || !all.every((t) => t.done)) return null;
+  // base scales a bit with how many tasks were done; phone-free skew off
+  const base = 40 + all.length * 10;
+  const loot = rollLoot(base, false);
+  const bonus = base + loot.bonus;
+  let next: Profile = {
+    ...p,
+    daily: { ...p.daily, claimed: true },
+    xpAdjust: (p.xpAdjust ?? 0) + bonus,
+    earnedAdjust: (p.earnedAdjust ?? 0) + bonus,
+  };
+  next = addXpLog(next, bonus);
+  saveProfile(next);
+  return { profile: next, loot, bonus };
 }
 
 export function loadLast(): Grind | null {

@@ -1,6 +1,7 @@
 "use client";
 
 import { FocusProvider } from "@/lib/focus";
+import { DailyPanel } from "./DailyPanel";
 import { Footer } from "./Footer";
 import { FocusTimer } from "./FocusTimer";
 import { Guide } from "./Guide";
@@ -16,6 +17,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
       </div>
       <FocusTimer />
       <Guide />
+      <DailyPanel />
     </FocusProvider>
   );
 }
